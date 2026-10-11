@@ -9,6 +9,8 @@ import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 
 /** Official Stremio metadata/catalog addon, installed on first launch (removable in Settings). */
 const val CINEMETA = "https://v3-cinemeta.strem.io/manifest.json"
