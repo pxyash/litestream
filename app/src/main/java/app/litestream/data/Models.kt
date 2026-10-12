@@ -22,7 +22,10 @@ data class CatalogDef(
     val extraRequired: List<String> = emptyList(),
     val extraSupported: List<String> = emptyList()
 ) {
-    val searchable: Boolean get() = extra.any { it.name == "search" } || "search" in extraSupported
+    val searchable: Boolean
+        get() = extra.any { it.name.equals("search", true) } ||
+            extraSupported.any { it.equals("search", true) } ||
+            id.contains("search", true) || (name ?: "").contains("search", true)
     val needsExtra: Boolean get() = extra.any { it.isRequired } || extraRequired.isNotEmpty()
 }
 
@@ -67,6 +70,7 @@ data class Video(
 ) {
     val ep: Int? get() = episode ?: number
     val label: String get() = title ?: name ?: "Episode ${ep ?: ""}"
+    fun tag(): String = "S${season}:E${ep} · $label"
 }
 
 @Serializable
@@ -102,18 +106,53 @@ data class Stream(
     val behaviorHints: BehaviorHints? = null
 )
 
-@Serializable data class CatalogResponse(val metas: List<Meta> = emptyList())
-@Serializable data class MetaResponse(val meta: Meta? = null)
-@Serializable data class StreamResponse(val streams: List<Stream> = emptyList())
-@Serializable data class SubsResponse(val subtitles: List<Subtitle> = emptyList())
+/** One "continue watching" record (a movie, or one episode of a series). */
+@Serializable
+data class WatchEntry(
+    val videoId: String,
+    val metaId: String,
+    val type: String,
+    val title: String,
+    val subtitle: String? = null,
+    val thumb: String? = null,
+    val streamUrl: String,
+    val addon: String = "",
+    val quality: Int = 0,
+    val positionMs: Long = 0,
+    val durationMs: Long = 0,
+    val updatedAt: Long = 0
+) {
+    val progress: Float
+        get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+}
 
 data class CatalogRow(val order: Int, val title: String, val items: List<Meta>)
 data class AddonStream(val addonName: String, val stream: Stream)
+
 data class PlaybackRequest(
     val url: String,
     val title: String,
-    val mediaKey: String,
+    val subtitle: String?,
     val type: String,
     val id: String,
+    val metaId: String,
+    val thumb: String?,
+    val addon: String,
+    val quality: Int,
+    val streamInfo: String,
     val embeddedSubs: List<Subtitle>
 )
+
+fun WatchEntry.toRequest() = PlaybackRequest(
+    url = streamUrl, title = title, subtitle = subtitle, type = type, id = videoId,
+    metaId = metaId, thumb = thumb, addon = addon, quality = quality,
+    streamInfo = "", embeddedSubs = emptyList()
+)
+
+fun nextVideo(meta: Meta, currentId: String): Video? {
+    val eps = meta.videos
+        .filter { (it.season ?: 0) > 0 && it.ep != null }
+        .sortedWith(compareBy<Video>({ it.season }, { it.ep }))
+    val i = eps.indexOfFirst { it.id == currentId }
+    return if (i >= 0) eps.getOrNull(i + 1) else null
+}

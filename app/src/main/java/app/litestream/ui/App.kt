@@ -16,6 +16,8 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
 import app.litestream.AppViewModel
+import app.litestream.data.Meta
+import app.litestream.data.toRequest
 
 @Composable
 fun App(vm: AppViewModel) {
@@ -34,8 +36,9 @@ fun App(vm: AppViewModel) {
         restoreState = true
     }
 
-    fun openDetail(m: app.litestream.data.Meta) =
-        nav.navigate("detail/${m.type}/${Uri.encode(m.id)}")
+    fun openDetail(m: Meta) = nav.navigate("detail/${m.type}/${Uri.encode(m.id)}")
+    fun streamsRoute(type: String, id: String, title: String) =
+        "streams/$type/${Uri.encode(id)}?title=${Uri.encode(title)}"
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         if (showRail) {
@@ -53,7 +56,15 @@ fun App(vm: AppViewModel) {
             }
         }
         NavHost(nav, startDestination = "home", modifier = Modifier.weight(1f)) {
-            composable("home") { HomeScreen(vm, ::openDetail) }
+            composable("home") {
+                HomeScreen(
+                    vm,
+                    onOpen = ::openDetail,
+                    onResume = { e -> vm.playback = e.toRequest(); nav.navigate("player") },
+                    onPickSource = { e -> nav.navigate(streamsRoute(e.type, e.videoId, e.title)) },
+                    onDetails = { e -> nav.navigate("detail/${e.type}/${Uri.encode(e.metaId)}") }
+                )
+            }
             composable("search") { SearchScreen(vm, ::openDetail) }
             composable("settings") { SettingsScreen(vm) }
             composable("detail/{type}/{id}") { e ->
@@ -61,9 +72,7 @@ fun App(vm: AppViewModel) {
                     vm,
                     e.arguments?.getString("type") ?: "movie",
                     e.arguments?.getString("id") ?: ""
-                ) { type, id, title ->
-                    nav.navigate("streams/$type/${Uri.encode(id)}?title=${Uri.encode(title)}")
-                }
+                ) { type, id, title -> nav.navigate(streamsRoute(type, id, title)) }
             }
             composable(
                 "streams/{type}/{id}?title={title}",
@@ -77,7 +86,17 @@ fun App(vm: AppViewModel) {
                     onPlay = { nav.navigate("player") }
                 )
             }
-            composable("player") { PlayerScreen(vm) { nav.popBackStack() } }
+            composable("player") {
+                PlayerScreen(vm, onExit = { nav.popBackStack() }) { type, id, title ->
+                    val prevId = nav.previousBackStackEntry?.arguments?.getString("id")
+                    val prevRoute = nav.previousBackStackEntry?.destination?.route
+                    if (prevRoute?.startsWith("streams") == true && prevId == id) {
+                        nav.popBackStack()
+                    } else {
+                        nav.navigate(streamsRoute(type, id, title)) { popUpTo("player") { inclusive = true } }
+                    }
+                }
+            }
         }
     }
 }

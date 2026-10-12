@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 
 package app.litestream.ui
 
@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -28,6 +29,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -36,7 +38,14 @@ import app.litestream.AppViewModel
 import app.litestream.data.*
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
-import androidx.compose.runtime.saveable.rememberSaveable
+
+fun formatTime(ms: Long): String {
+    val s = (ms / 1000).coerceAtLeast(0)
+    val h = s / 3600
+    val m = (s % 3600) / 60
+    val sec = s % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
+}
 
 // ---------- shared pieces ----------
 
@@ -106,10 +115,19 @@ private fun Badge(t: String) {
 // ---------- Home ----------
 
 @Composable
-fun HomeScreen(vm: AppViewModel, onOpen: (Meta) -> Unit) {
+fun HomeScreen(
+    vm: AppViewModel,
+    onOpen: (Meta) -> Unit,
+    onResume: (WatchEntry) -> Unit,
+    onPickSource: (WatchEntry) -> Unit,
+    onDetails: (WatchEntry) -> Unit
+) {
     val addons by vm.addons.collectAsState()
     val rows by vm.home.collectAsState()
     val loading by vm.homeLoading.collectAsState()
+    val history by vm.repo.history.collectAsState()
+    val continueList = remember(history) { history.distinctBy { it.metaId } }
+    var selected by remember { mutableStateOf<WatchEntry?>(null) }
     LaunchedEffect(addons) { vm.loadHome() }
 
     LazyColumn(
@@ -118,6 +136,19 @@ fun HomeScreen(vm: AppViewModel, onOpen: (Meta) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         item { Text("Home", style = MaterialTheme.typography.headlineMedium) }
+        if (continueList.isNotEmpty()) {
+            item {
+                Column {
+                    Text(
+                        "Continue Watching", style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(continueList) { e -> ContinueCard(e) { selected = e } }
+                    }
+                }
+            }
+        }
         if (addons.isEmpty()) {
             item { Text("No addons yet. Loading the default catalog… or add one in Settings.") }
         } else if (rows.isEmpty() && loading) {
@@ -125,6 +156,85 @@ fun HomeScreen(vm: AppViewModel, onOpen: (Meta) -> Unit) {
         }
         items(rows, key = { it.order }) { row -> CatalogRowView(row, onOpen) }
     }
+
+    selected?.let { e ->
+        ContinueDialog(
+            e,
+            onDismiss = { selected = null },
+            onResume = { selected = null; onResume(e) },
+            onPick = { selected = null; onPickSource(e) },
+            onDetails = { selected = null; onDetails(e) },
+            onRemove = { selected = null; vm.repo.removeHistory(e.videoId) }
+        )
+    }
+}
+
+@Composable
+private fun ContinueCard(e: WatchEntry, onClick: () -> Unit) {
+    Column(
+        Modifier.width(240.dp).focusBorder().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(4.dp)
+    ) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            AsyncImage(
+                model = e.thumb, contentDescription = e.title,
+                contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()
+            )
+            Icon(
+                Icons.Default.PlayArrow, null, tint = Color.White,
+                modifier = Modifier.align(Alignment.Center).size(40.dp)
+            )
+            Box(
+                Modifier.align(Alignment.BottomStart).fillMaxWidth().height(4.dp)
+                    .background(Color(0x66FFFFFF))
+            ) {
+                Box(
+                    Modifier.fillMaxWidth(e.progress).fillMaxHeight()
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
+        }
+        Text(
+            e.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 4.dp)
+        )
+        val left = ((e.durationMs - e.positionMs) / 60000).toInt().coerceAtLeast(0)
+        Text(
+            listOfNotNull(e.subtitle, "$left min left").joinToString(" · "),
+            maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall
+        )
+    }
+}
+
+@Composable
+private fun ContinueDialog(
+    e: WatchEntry,
+    onDismiss: () -> Unit,
+    onResume: () -> Unit,
+    onPick: () -> Unit,
+    onDetails: () -> Unit,
+    onRemove: () -> Unit
+) {
+    val fr = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(120); runCatching { fr.requestFocus() } }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        title = { Text(e.title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                e.subtitle?.let { Text(it) }
+                Button(onClick = onResume, modifier = Modifier.fillMaxWidth().focusRequester(fr)) {
+                    Text("Resume from ${formatTime(e.positionMs)}")
+                }
+                OutlinedButton(onClick = onPick, modifier = Modifier.fillMaxWidth()) { Text("Choose another source") }
+                OutlinedButton(onClick = onDetails, modifier = Modifier.fillMaxWidth()) { Text("Details") }
+                TextButton(onClick = onRemove, modifier = Modifier.fillMaxWidth()) { Text("Remove from Continue Watching") }
+            }
+        }
+    )
 }
 
 // ---------- Search ----------
@@ -133,6 +243,7 @@ fun HomeScreen(vm: AppViewModel, onOpen: (Meta) -> Unit) {
 fun SearchScreen(vm: AppViewModel, onOpen: (Meta) -> Unit) {
     var q by rememberSaveable { mutableStateOf("") }
     val rows by vm.searchResults.collectAsState()
+    val status by vm.searchStatus.collectAsState()
     LaunchedEffect(q) { delay(500); vm.search(q) }
 
     LazyColumn(
@@ -150,6 +261,7 @@ fun SearchScreen(vm: AppViewModel, onOpen: (Meta) -> Unit) {
                 modifier = Modifier.fillMaxWidth()
             )
         }
+        status?.let { s -> item { Text(s, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
         items(rows, key = { it.order }) { row -> CatalogRowView(row, onOpen) }
     }
 }
@@ -161,8 +273,10 @@ fun DetailScreen(vm: AppViewModel, type: String, id: String, onStreams: (String,
     var meta by remember(type, id) { mutableStateOf<Meta?>(null) }
     var failed by remember(type, id) { mutableStateOf(false) }
     LaunchedEffect(type, id) {
-        meta = vm.repo.meta(type, id)
-        failed = meta == null
+        val m = vm.repo.meta(type, id)
+        meta = m
+        vm.currentMeta = m
+        failed = m == null
     }
     val m = meta
     if (m == null) {
@@ -295,6 +409,26 @@ fun StreamsScreen(vm: AppViewModel, type: String, id: String, title: String, onP
         sortStreams(parseStreams(all).filter { provider == null || it.addon == provider }, vm.sortMode)
     }
 
+    fun play(p: ParsedStream) {
+        val meta = vm.currentMeta?.takeIf { id == it.id || id.startsWith(it.id + ":") }
+        val prev = vm.repo.history.value.firstOrNull { it.videoId == id }
+        val video = meta?.videos?.firstOrNull { it.id == id }
+        vm.playback = PlaybackRequest(
+            url = p.url,
+            title = meta?.name ?: prev?.title ?: title.ifBlank { id },
+            subtitle = video?.tag() ?: prev?.subtitle,
+            type = type,
+            id = id,
+            metaId = meta?.id ?: prev?.metaId ?: id.substringBefore(":"),
+            thumb = video?.thumbnail ?: meta?.background ?: meta?.poster ?: prev?.thumb,
+            addon = p.addon,
+            quality = p.quality,
+            streamInfo = p.text,
+            embeddedSubs = p.stream.subtitles
+        )
+        onPlay()
+    }
+
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(24.dp),
@@ -317,18 +451,11 @@ fun StreamsScreen(vm: AppViewModel, type: String, id: String, title: String, onP
         }
         item { Text("Sort by", style = MaterialTheme.typography.labelMedium) }
         item { SortChips(vm) }
+        item { Text("${parsed.size} sources", style = MaterialTheme.typography.labelMedium) }
         if (!loading && parsed.isEmpty()) {
             item { Text("No playable sources found. Install a stream addon (e.g. Torrentio/TorBox) in Settings.") }
         }
-        items(parsed) { p ->
-            StreamRow(p) {
-                vm.playback = PlaybackRequest(
-                    url = p.url, title = title.ifBlank { id }, mediaKey = id, type = type, id = id,
-                    embeddedSubs = p.stream.subtitles
-                )
-                onPlay()
-            }
-        }
+        items(parsed) { p -> StreamRow(p) { play(p) } }
     }
 }
 
@@ -337,14 +464,40 @@ private fun StreamRow(p: ParsedStream, onClick: () -> Unit) {
     Column(
         Modifier.fillMaxWidth().focusBorder().clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick).padding(12.dp),
+            .clickable(onClick = onClick).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(p.addon, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-            p.badges.forEach { Badge(it) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(p.addon, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            if (p.name.isNotBlank()) {
+                Text(p.name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
-        Text(p.text, style = MaterialTheme.typography.bodySmall, maxLines = 5, overflow = TextOverflow.Ellipsis)
+        if (p.badges.isNotEmpty()) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                p.badges.forEach { Badge(it) }
+            }
+        }
+        if (p.title.isNotBlank()) {
+            Text(p.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        }
+        if (p.description.isNotBlank()) {
+            Text(p.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (p.title.isBlank() && p.description.isBlank() && p.name.isBlank()) {
+            Text(p.text, style = MaterialTheme.typography.bodySmall)
+        }
+        p.filename?.takeIf { it.isNotBlank() && it !in p.title }?.let {
+            Text("File: $it", style = MaterialTheme.typography.bodySmall)
+        }
+        val facts = listOfNotNull(
+            formatSize(p.sizeBytes).takeIf { it.isNotEmpty() }?.let { "Size: $it" },
+            p.seeders.takeIf { it > 0 }?.let { "Seeders: $it" },
+            Uri.parse(p.url).host?.let { "Host: $it" }
+        )
+        if (facts.isNotEmpty()) {
+            Text(facts.joinToString("   •   "), style = MaterialTheme.typography.labelSmall)
+        }
     }
 }
 
@@ -381,6 +534,8 @@ fun SettingsScreen(vm: AppViewModel) {
         }
         item { Text("Default stream sort", style = MaterialTheme.typography.titleMedium) }
         item { SortChips(vm) }
+        item { Text("Watch history", style = MaterialTheme.typography.titleMedium) }
+        item { OutlinedButton(onClick = { vm.repo.clearHistory() }) { Text("Clear Continue Watching") } }
         item { Text("Installed addons", style = MaterialTheme.typography.titleMedium) }
         items(addons) { a ->
             Row(
