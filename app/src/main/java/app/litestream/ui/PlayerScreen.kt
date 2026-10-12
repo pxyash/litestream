@@ -91,6 +91,7 @@ import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import androidx.compose.ui.input.key.nativeKeyEvent
 
 private enum class Panel { NONE, SPEED, TRACKS, INFO }
 
